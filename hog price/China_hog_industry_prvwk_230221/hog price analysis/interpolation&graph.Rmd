@@ -1,0 +1,374 @@
+---
+title: "graphing"
+author: "Rundong PENG"
+date: '2023-02-22'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load packages 
+```{r}
+library(tidyverse)
+library(dplyr)
+library(zoo)
+library(matrixStats)
+library(ggplot2)
+library(patchwork)
+library(sparsevar)
+```
+
+Load data and construct confidence interval 
+```{r}
+piglet_p = read.csv("China_piglet_prvwk_230221.csv") %>% 
+  mutate(Avg_pg = rowMeans2(as.matrix(piglet_p[,c(3:30)]), na.rm = TRUE)) %>%    
+  mutate(Std_pg = rowSds(as.matrix(piglet_p[,c(3:30)]), na.rm = TRUE)) %>%
+  mutate(Interval_h_pg = Avg_pg + 2*Std_pg) %>%
+  mutate(Interval_l_pg = Avg_pg - 2*Std_pg)
+
+hog_p = read.csv("China_hog_prvwk_230221.csv") %>%
+  mutate(Avg_hog = rowMeans2(as.matrix(hog_p[,c(3:30)]), na.rm = TRUE)) %>%        
+  mutate(Std_hog = rowSds(as.matrix(hog_p[,c(3:30)]), na.rm = TRUE)) %>%
+  mutate(Interval_h_hog = Avg_hog + 2*Std_hog) %>%
+  mutate(Interval_l_hog = Avg_hog - 2*Std_hog)
+
+pork_p = read.csv("China_pork_prvwk_230221.csv") %>% 
+  mutate(Avg_pk = rowMeans2(as.matrix(pork_p[,c(3:30)]), na.rm = TRUE)) %>%        
+  mutate(Std_pk = rowSds(as.matrix(pork_p[,c(3:30)]), na.rm = TRUE)) %>%
+  mutate(Interval_h_pg = Avg_pk + 2*Std_pk) %>%
+  mutate(Interval_l_pg = Avg_pk - 2*Std_pk)
+
+Prices = cbind(piglet_p$Avg_pg,piglet_p$Interval_h_pg,piglet_p$Interval_l_pg,hog_p$Avg_hog,hog_p$Interval_h_hog,hog_p$Interval_l_hog,pork_p$Avg_pk,pork_p$Interval_h_pg,pork_p$Interval_l_pg) %>% as.data.frame()
+```
+
+Get summary table of missing value 
+```{r}
+#Piglet
+piglet_p = read.csv("China_piglet_prvwk_230228.csv") 
+#Get summary of missing data
+sum_piglet_missing = piglet_p %>%
+  dplyr::select(-yrwk) %>%
+  pivot_longer(cols = -c(yr, wk), names_to = "Provinces", values_to = "Prices") %>%
+  group_by(yr) %>% 
+  mutate(nas = case_when(is.na(Prices)  ~ 1,
+                         TRUE ~ 0)) %>%
+  group_by(Provinces, yr) %>% 
+  summarise(sumna = sum(nas))
+#Linear interpolation
+piglet_p_sort = piglet_p %>% 
+  filter(yrwk > 1727) %>%
+  dplyr::select(-c(yr,wk,yrwk,pl_9,pl_20)) %>%
+  na.approx(na.rm = FALSE) %>%
+  na.locf() 
+ 
+
+#Hog
+hog_p = read.csv("China_hog_prvwk_230228.csv") 
+#Get summary of missing data
+sum_hog_missing = hog_p %>%
+  dplyr::select(-c(yrwk)) %>%
+  pivot_longer(cols = -c(yr, wk), names_to = "Provinces", values_to = "Prices") %>%
+  group_by(yr) %>% 
+  mutate(nas = case_when(is.na(Prices)  ~ 1,
+                         TRUE ~ 0)) %>%
+  group_by(Provinces, yr) %>% 
+  summarise(sumna = sum(nas)) 
+#Linear interpolation
+hog_p_sort = hog_p %>% 
+  filter(yrwk > 1727) %>%
+  dplyr::select(-c(yr,wk,yrwk,pg_9,pg_20)) %>%
+  na.approx(na.rm = FALSE) %>%
+  na.locf() 
+
+#Pork
+pork_p = read.csv("China_pork_prvwk_230228.csv") 
+#Get summary of missing data
+sum_pork_missing = pork_p %>%
+  dplyr::select(-c(yrwk)) %>%
+  pivot_longer(cols = -c(yr, wk), names_to = "Provinces", values_to = "Prices") %>%
+  group_by(yr) %>% 
+  mutate(nas = case_when(is.na(Prices)  ~ 1,
+                         TRUE ~ 0)) %>%
+  group_by(Provinces, yr) %>% 
+  summarise(sumna = sum(nas))
+#Linear interpolation
+pork_p_sort = pork_p %>% 
+  filter(yrwk > 1727) %>%
+  dplyr::select(-c(yr,wk,yrwk,pk_9,pk_20)) %>%
+  na.approx(na.rm = FALSE) %>%
+  na.locf() 
+
+missing = cbind(sum_piglet_missing,sum_hog_missing$sumna,sum_pork_missing$sumna)
+colnames(missing) = c("province","year","piglet","hog","pork")
+write.csv(missing, file = "missing_data.csv")
+price_all = cbind(piglet_p_sort,hog_p_sort[-288,],pork_p_sort[-288,]) %>% as.data.frame() %>% mutate(Date = seq(as.Date("2017-06-26"), length.out=length(price_all$pl_1),by="week"))
+```
+
+Save data
+```{r}
+price_all = cbind(piglet_p_sort,hog_p_sort[-288,],pork_p_sort[-288,]) %>% as.data.frame() %>% mutate(Date = seq(as.Date("2017-06-26"), length.out=length(price_all$pl_1),by="week")) %>% write.csv("China_Hog_PriceAnalysis.csv")
+```
+
+VECM estimation 
+```{r}
+fit_pre = fitVECM(price_all[1:59,], p = 2, penalty = "ENET")
+rk_pre = svd(fit_pre$Pi)
+id = 1:81
+data_rk_pre = cbind(id,rk_pre$d) %>% as.data.frame()
+ggplot(data_rk_pre, aes(x=id,y=V2)) +
+  geom_point() +
+  geom_line() +
+  theme_bw() + 
+  labs(x="Sequence", y="Singular values") +
+  ggtitle("Pre-outbreak")
+
+fit_dur = fitVECM(price_all[60:91,], p = 2, penalty = "ENET")
+rk_dur = svd(fit_dur$Pi)
+id = 1:81
+data_rk_dur = cbind(id,rk_dur$d) %>% as.data.frame()
+ggplot(data_rk_dur, aes(x=id,y=V2)) +
+  geom_point() +
+  geom_line() +
+  theme_bw() + 
+  labs(x="Sequence", y="Singular values") +
+  ggtitle("During outbreak")
+
+fit_post = fitVECM(price_all[92:287,], p = 2, penalty = "ENET")
+rk_post = svd(fit_post$Pi)
+id = 1:81
+data_rk_post = cbind(id,rk_post$d) %>% as.data.frame()
+ggplot(data_rk_post, aes(x=id,y=V2)) +
+  geom_point() +
+  geom_line() +
+  theme_bw() + 
+  labs(x="Sequence", y="Singular values") +
+  ggtitle("Post-outbreak")
+
+fit_all = fitVECM(price_all, p = 2, penalty = "ENET")
+rk = svd(fit_all$Pi)
+id = 1:81
+data_rk = cbind(id,rk$d) %>% as.data.frame()
+ggplot(data_rk, aes(x=id,y=V2)) +
+  geom_point() +
+  geom_line() +
+  theme_bw() + 
+  labs(x="Sequence", y="Eigenvalue") +
+  ggtitle("All time frame") 
+
+```
+
+Plot the missing value as propotion of year
+```{r}
+gg <- missing %>%
+  pivot_longer(cols = c(piglet, hog, pork), names_to = "type", values_to = "days_missing")  %>%
+  mutate(province = substr(province, start = 4,stop = 1000000L)) %>%
+  mutate(province_type = paste0(province, type)) %>%
+  ggplot(aes(x = year, y = days_missing/52, color = type)) +
+  geom_line() +
+  geom_point() + facet_wrap(vars(province)) +
+  ggtitle("Precentage of observations missing among years")
+
+gg
+```
+
+Plot the patterns of missing data 
+```{r}
+na_piglet = piglet_p %>%
+  select(-c(yr,wk)) %>%
+  pivot_longer(cols = -c(yrwk), names_to = "type", values_to = "Prices") %>%
+  group_by(type) %>% 
+  mutate(nas = case_when(is.na(Prices)  ~ 1,
+                         TRUE ~ 0)) %>%
+  mutate(Date = seq(as.Date("2015-12-29"), length.out=length(nas), by="week")) %>%
+  filter(yrwk > 1699 & yrwk < 1800)
+
+na_piglet_plot = na_piglet %>%
+  ggplot(aes(x = Date, y = nas, color = type)) +
+  geom_point() + facet_wrap(vars(type)) +
+  ggtitle("piglet")
+
+na_piglet_plot
+
+na_hog = hog_p %>%
+  select(-c(yr,wk)) %>%
+  pivot_longer(cols = -c(yrwk), names_to = "type", values_to = "Prices") %>%
+  group_by(type) %>% 
+  mutate(nas = case_when(is.na(Prices)  ~ 1,
+                         TRUE ~ 0)) %>%
+  mutate(Date = seq(as.Date("2015-12-29"), length.out=length(nas), by="week"))
+
+na_hog_plot = na_hog %>%
+  ggplot(aes(x = Date, y = nas, color = type)) +
+  geom_point() + facet_wrap(vars(type)) +
+  ggtitle("hog")
+
+na_pork = pork_p %>%
+  select(-c(yr,wk)) %>%
+  pivot_longer(cols = -c(yrwk), names_to = "type", values_to = "Prices") %>%
+  group_by(type) %>% 
+  mutate(nas = case_when(is.na(Prices)  ~ 1,
+                         TRUE ~ 0)) %>%
+  mutate(Date = seq(as.Date("2015-12-29"), length.out=length(nas), by="week")) %>%
+  filter(yrwk > 1699 & yrwk < 1800)
+
+na_pork_plot = na_pork %>%
+  ggplot(aes(x = Date, y = nas, color = type)) +
+  geom_point() + facet_wrap(vars(type)) +
+  ggtitle("pork")
+```
+
+Temp
+```{r}
+piglet_p %>%
+  select(-c(n, yrwk, Avg_pg, Std_pg, Interval_h_pg, Interval_l_pg)) %>%
+  pivot_longer(cols = -c(yr, wk), names_to = "Provinces", values_to = "Prices") %>%
+  group_by(yr) %>% 
+  mutate(nas = case_when(is.na(Prices)  ~ 1,
+                         TRUE ~ 0)) %>%
+  group_by(yr, wk) %>%
+  summarize(ProvincePriceMean = mean(Prices, na.rm = TRUE), sd(Prices, na.rm = TRUE))
+
+```
+
+Plot price of all 
+```{r, fig.width = 6, fig.height = 4}
+Prices$Date = seq(as.Date("2015-12-29"), length.out=368, by="week")
+ggplot(data = Prices, aes(x = Date, y = V1)) +
+  geom_line() + geom_line(aes(x = Date, y = V4)) + 
+  geom_line(aes(x = Date, y = V7)) +
+  geom_ribbon(aes(ymin = V2, ymax = V3, alpha=0.2, fill = "Piglet")) +
+  geom_ribbon(aes(ymin = V5, ymax = V6, alpha=0.2, fill = "Hog")) +
+  geom_ribbon(aes(ymin = V8, ymax = V9, alpha=0.2, fill = "Pork")) +
+  ggtitle('Hog') + 
+  labs(x="Date",y="Normalized Pirce",
+               title="Prices of piglet, hog, and pork in China")
+
+PricesI <- Prices %>%  mutate(Price = "Piglet") %>% select(Date, Price, V1, V2, V3) 
+colnames(PricesI) <- c("Date", "Price", "Mean", "Lower", "Upper")
+
+PricesII <- Prices %>%  mutate(Price = "Hog") %>% select(Date, Price, V4, V5, V6) 
+colnames(PricesII) <- c("Date", "Price", "Mean", "Lower", "Upper")
+
+PricesIII <- Prices %>%  mutate(Price = "Pork") %>% select(Date, Price, V7, V8, V9) 
+colnames(PricesIII) <- c("Date", "Price", "Mean", "Lower", "Upper")
+
+
+Pricesfinal <- rbind(PricesI[79:nrow(PricesI),], PricesII[79:nrow(PricesI),], PricesIII[79:nrow(PricesI),])
+
+picture <- Pricesfinal %>% 
+  #group_by(Type) %>% 
+  #filter(Type == "Piglet") %>%
+  ggplot(aes(x = Date, y = Mean, group = Price)) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  geom_line() +
+  geom_ribbon(aes(ymin = Lower, ymax = Upper, group = Price, color = Price, fill = Price), alpha = .5, linetype = "blank") +
+  geom_vline(xintercept = as.Date('2018-08-07')) + #59
+  geom_vline(xintercept = as.Date('2019-03-19')) + #91
+  
+  #annotate('rect', xmin = as.Date('2018-08-07'), xmax = as.Date("2019-03-19"), ymin = 0, ymax = 195, fill = "grey", alpha =.4) +
+  labs(x = "", 
+       y = "Prices in 2018 RMB/kg",
+       #title = "Weekly pork, hog, and piglet prices across 29 Chinese provinces", 
+       color = "Price", fill = "Price") +
+  theme_bw() +
+  theme(text = element_text(size = 12))
+picture12 <- picture
+ggsave("picture12.png", width = 6, height = 4)
+```
+
+Load data, apply interpolation for hog_p  
+```{r}
+hog_p = read.csv("China_hog_prvwk_230221.csv") %>% 
+  group_by(yr) %>%
+  na.approx() %>%
+  as.data.frame()
+  
+k = hog_p[,3:31] %>% 
+  mutate_if(is.numeric, ~replace_na(.,mean(., na.rm = TRUE)))
+hog_p_fill = cbind(hog_p$yrwk,k)
+
+hog_p_fill = hog_p_fill %>% 
+  mutate(Avg = rowMeans2(as.matrix(hog_p_fill[,c(-1)]))) %>%
+  mutate(Std = rowSds(as.matrix(hog_p_fill[,c(-1)]))) %>%
+  mutate(Interval_h = Avg + 2*Std) %>%
+  mutate(Interval_l = Avg - 2*Std)
+
+Trend = seq_along(hog_p_fill$`hog_p$yrwk`)
+hog_p_fill = cbind(hog_p_fill,Trend)
+```
+
+Load data, apply interpolation for pork_p  
+```{r}
+pork_p = read.csv("China_pork_prvwk_230221.csv") %>% 
+  group_by(yr) %>%
+  na.approx() %>%
+  as.data.frame()
+  
+k = pork_p[,3:31] %>% 
+  mutate_if(is.numeric, ~replace_na(.,mean(., na.rm = TRUE)))
+pork_p_fill = cbind(pork_p$yrwk,k)
+
+pork_p_fill = pork_p_fill %>% 
+  mutate(Avg = rowMeans2(as.matrix(pork_p_fill[,c(-1)]))) %>%
+  mutate(Std = rowSds(as.matrix(pork_p_fill[,c(-1)]))) %>%
+  mutate(Interval_h = Avg + 2*Std) %>%
+  mutate(Interval_l = Avg - 2*Std)
+
+Trend = seq_along(pork_p_fill$`pork_p$yrwk`)
+pork_p_fill = cbind(pork_p_fill,Trend)
+```
+
+Load data, apply interpolation for piglet_p  
+```{r}
+piglet_p = read.csv("China_piglet_prvwk_230221.csv") %>% 
+  group_by(yr) %>%
+  na.approx() %>%
+  as.data.frame()
+  
+k = piglet_p[,3:31] %>% 
+  mutate_if(is.numeric, ~replace_na(.,mean(., na.rm = TRUE)))
+piglet_p_fill = cbind(piglet_p$yrwk,k)
+
+piglet_p_fill = piglet_p_fill %>% 
+  mutate(Avg = rowMeans2(as.matrix(piglet_p_fill[,c(-1)]))) %>%
+  mutate(Std = rowSds(as.matrix(piglet_p_fill[,c(-1)]))) %>%
+  mutate(Interval_h = Avg + 2*Std) %>%
+  mutate(Interval_l = Avg - 2*Std)
+
+Trend = seq_along(piglet_p_fill$`piglet_p$yrwk`)
+piglet_p_fill = cbind(piglet_p_fill,Trend)
+```
+
+Graph
+```{r}
+p1 = ggplot(data = hog_p, aes(x = Trend, y = Avg)) +
+       geom_line() + geom_line(aes(data = ))
+  geom_ribbon(data = hog_p_fill, aes(ymin = Interval_l, ymax = Interval_h, alpha=0.2)) +
+  ggtitle('Hog')
+              
+p2 = ggplot(data = pork_p_fill, aes(x = Trend, y = Avg)) +
+       geom_line() + 
+  geom_ribbon(data = pork_p_fill, aes(ymin = Interval_l, ymax = Interval_h, alpha=0.2)) +
+  ggtitle('Pork')
+
+p3 = ggplot(data = piglet_p_fill, aes(x = Trend, y = Avg)) +
+       geom_line() + 
+  geom_ribbon(data = piglet_p_fill, aes(ymin = Interval_l, ymax = Interval_h, alpha=0.2)) +
+  ggtitle('Piglet')
+
+p3/p1/p2
+```
+
+```{r}
+# Create a sample dataframe
+df <- data.frame(x = c(NA, NA, 1, 2, 3, NA, NA), y = c(4, 5, 6, NA, NA, 9, 10))
+
+# Use na.approx() to replace the NAs at the beginning and end of each column with linear interpolation
+df_interpolated <- na.approx(df, na.rm = FALSE, maxgap = Inf)
+
+# View the interpolated dataframe
+df_interpolated
+```
+

@@ -1,0 +1,63 @@
+---
+title: "sparse var"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(matrixStats)
+library(patchwork)
+library(zoo)
+library(sparsevar)
+library(vars)
+library(urca)
+library(tsDyn)
+```
+
+```{r}
+data = read.csv("data_sparse.csv") %>%
+  na.approx() %>%
+  as.data.frame() %>%
+  mutate_all(~replace_na(.,0.5)) %>%
+  as.matrix()
+
+
+```
+
+```{r}
+VARselect(data,lag.max = 4, type = "const")
+jotest = ca.jo(data, type = "eigen",
+             K = 2, spec = "transitory")
+```
+
+```{r, fig.height= 10, fig.width= 25, }
+fit = fitVECM(data, p = 2, penalty = "ENET") #no confidence interval (significance)
+plotVECM(fit)
+decomposePi(fit, rk = 13)
+res1 = decomposePi(fit, rk = 3)
+#cbind(res$alpha,res1$alpha)
+#cbind(res$beta,res1$beta)
+
+
+```
+
+```{r}
+set.seed(1)
+sim <- simulateVAR(N = 20, p = 2)
+fit = fitVAR(sim$series)
+plotVAR(fit)
+```
+
+```{r}
+rk = svd(fit$Pi)
+rk1 = qr(fit$Pi)
+plot(rk$d )
+#write.csv(fit$Pi)
+```
+
+simulate vecm
+
+```{r}
+
+```
